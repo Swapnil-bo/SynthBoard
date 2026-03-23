@@ -1,5 +1,6 @@
 """
 SQLite database via aiosqlite — battles, votes, Elo, training runs.
+PRAGMA foreign_keys = ON on every connection.
 """
 import aiosqlite
 from backend.config import DATABASE_PATH
@@ -84,11 +85,30 @@ CREATE TABLE IF NOT EXISTS elo_history (
     recorded_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     FOREIGN KEY (model_id) REFERENCES arena_models(id)
 );
+
+-- Indexes for query performance
+CREATE INDEX IF NOT EXISTS idx_arena_models_elo ON arena_models(elo_rating DESC);
+CREATE INDEX IF NOT EXISTS idx_battles_model_a ON battles(model_a_id);
+CREATE INDEX IF NOT EXISTS idx_battles_model_b ON battles(model_b_id);
+CREATE INDEX IF NOT EXISTS idx_battles_created ON battles(created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_elo_history_model ON elo_history(model_id, recorded_at DESC);
+CREATE INDEX IF NOT EXISTS idx_training_runs_status ON training_runs(status);
 """
 
 
 async def get_db() -> aiosqlite.Connection:
-    """Open a database connection."""
+    """Open a connection with foreign keys enforced and row factory set."""
     db = await aiosqlite.connect(str(DATABASE_PATH))
+    await db.execute("PRAGMA foreign_keys = ON")
     db.row_factory = aiosqlite.Row
     return db
+
+
+async def init_db() -> None:
+    """Create all tables and indexes if they don't exist."""
+    db = await get_db()
+    try:
+        await db.executescript(SCHEMA_SQL)
+        await db.commit()
+    finally:
+        await db.close()
