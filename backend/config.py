@@ -96,3 +96,54 @@ TRAINING_DEFAULTS = {
     "dataloader_num_workers": 0,       # 0 on Windows to avoid multiprocessing issues
     "dataloader_pin_memory": False,    # False to save RAM on 8GB system
 }
+
+# ---------------------------------------------------------------------------
+# Model tiers (VRAM budget)
+# ---------------------------------------------------------------------------
+MODEL_TIERS = {
+    # Tier 1 — Comfortable (recommended)
+    "unsloth/Qwen2.5-1.5B-bnb-4bit": {"tier": 1, "params": "1.5B", "vram_train_mb": 3200, "family": "qwen2.5"},
+    "unsloth/Qwen2.5-1.5B-Instruct-bnb-4bit": {"tier": 1, "params": "1.5B", "vram_train_mb": 3200, "family": "qwen2.5"},
+    "unsloth/SmolLM2-1.7B-bnb-4bit": {"tier": 1, "params": "1.7B", "vram_train_mb": 3400, "family": "smollm2"},
+    "unsloth/SmolLM2-1.7B-Instruct-bnb-4bit": {"tier": 1, "params": "1.7B", "vram_train_mb": 3400, "family": "smollm2"},
+    "unsloth/Llama-3.2-1B-bnb-4bit": {"tier": 1, "params": "1B", "vram_train_mb": 2800, "family": "llama3"},
+    "unsloth/Llama-3.2-1B-Instruct-bnb-4bit": {"tier": 1, "params": "1B", "vram_train_mb": 2800, "family": "llama3"},
+    # Tier 2 — Tight (advanced users, monitor VRAM)
+    "unsloth/Qwen2.5-3B-bnb-4bit": {"tier": 2, "params": "3B", "vram_train_mb": 5000, "family": "qwen2.5"},
+    "unsloth/Qwen2.5-3B-Instruct-bnb-4bit": {"tier": 2, "params": "3B", "vram_train_mb": 5000, "family": "qwen2.5"},
+    "unsloth/Llama-3.2-3B-bnb-4bit": {"tier": 2, "params": "3B", "vram_train_mb": 5200, "family": "llama3"},
+    "unsloth/Llama-3.2-3B-Instruct-bnb-4bit": {"tier": 2, "params": "3B", "vram_train_mb": 5200, "family": "llama3"},
+}
+
+# ---------------------------------------------------------------------------
+# Ollama Modelfile templates — MUST match model family chat format
+# ---------------------------------------------------------------------------
+OLLAMA_TEMPLATES = {
+    "qwen2.5": (
+        '<|im_start|>system\n{{.System}}<|im_end|>\n'
+        '<|im_start|>user\n{{.Prompt}}<|im_end|>\n'
+        '<|im_start|>assistant\n'
+    ),
+    "llama3": (
+        '<|begin_of_text|><|start_header_id|>system<|end_header_id|>\n'
+        '{{.System}}<|eot_id|><|start_header_id|>user<|end_header_id|>\n'
+        '{{.Prompt}}<|eot_id|><|start_header_id|>assistant<|end_header_id|>\n'
+    ),
+    "smollm2": (
+        '<|im_start|>system\n{{.System}}<|im_end|>\n'
+        '<|im_start|>user\n{{.Prompt}}<|im_end|>\n'
+        '<|im_start|>assistant\n'
+    ),
+    "phi3": (
+        '<|system|>\n{{.System}}<|end|>\n'
+        '<|user|>\n{{.Prompt}}<|end|>\n'
+        '<|assistant|>\n'
+    ),
+}
+
+# ---------------------------------------------------------------------------
+# Arena
+# ---------------------------------------------------------------------------
+DEFAULT_ELO = 1200.0
+ELO_K_FACTOR = 32
+OLLAMA_INFERENCE_TIMEOUT_S = 120
