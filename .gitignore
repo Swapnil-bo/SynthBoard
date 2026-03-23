@@ -1,0 +1,49 @@
+# Python
+venv/
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+dist/
+build/
+*.egg
+
+# Environment
+.env
+
+# Database
+*.db
+synthboard.db
+
+# Data (large files, user uploads)
+data/uploads/
+data/formatted/
+data/checkpoints/
+data/exports/
+
+# Keep demo data and prompt bank
+!data/demo/
+!data/prompt_bank.json
+
+# Node
+frontend/node_modules/
+frontend/dist/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Logs
+logs/
+*.log
+
+# Unsloth cache
+unsloth_compiled_cache/
