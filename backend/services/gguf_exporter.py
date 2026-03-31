@@ -4,16 +4,23 @@ Checkpoint -> GGUF -> Ollama registration.
 Full export pipeline:
 1. Pre-flight disk space check
 2. Load base model + LoRA adapter from checkpoint
-3. Merge + convert to GGUF via unsloth's save_pretrained_gguf
-4. Generate Ollama Modelfile with correct chat template (from config.OLLAMA_TEMPLATES)
-5. Register in Ollama via `ollama create`
-6. Verify with a test prompt
+3. Merge LoRA into base model -> save as standard HuggingFace model
+4. Convert HF model to BF16 GGUF via convert_hf_to_gguf.py
+5. Quantize BF16 GGUF to Q4_K_M via llama-quantize
+6. Generate Ollama Modelfile with correct chat template (from config.OLLAMA_TEMPLATES)
+7. Register in Ollama via `ollama create`
+8. Verify with a test prompt
+
+Uses pre-built llama.cpp binaries (convert script + llama-quantize.exe) instead of
+unsloth's save_pretrained_gguf which tries to build llama.cpp from source and hangs
+on Windows.
 """
 import gc
 import logging
 import os
 import shutil
 import subprocess
+import sys
 import time
 from dataclasses import dataclass
 from pathlib import Path
@@ -29,6 +36,9 @@ from backend.config import (
 )
 
 logger = logging.getLogger(__name__)
+
+# Default location where unsloth clones and builds llama.cpp
+_UNSLOTH_LLAMA_CPP_DIR = Path.home() / ".unsloth" / "llama.cpp"
 
 # Estimated disk overhead for merge+GGUF per model size tier
 # merged HF model (~2x final GGUF) + GGUF output
@@ -48,6 +58,30 @@ class ExportResult:
     ollama_model_name: Optional[str] = None
     error: Optional[str] = None
     total_time_seconds: Optional[float] = None
+
+
+def _find_llama_cpp_tools() -> tuple[Optional[Path], Optional[Path]]:
+    """
+    Locate the pre-built llama.cpp tools:
+    - convert_hf_to_gguf.py (Python script)
+    - llama-quantize executable
+
+    Returns (converter_script, quantize_exe) or (None, None) if not found.
+    """
+    converter = _UNSLOTH_LLAMA_CPP_DIR / "convert_hf_to_gguf.py"
+    quantize = _UNSLOTH_LLAMA_CPP_DIR / "build" / "bin" / "Release" / "llama-quantize.exe"
+
+    if not converter.exists():
+        converter = None
+    if not quantize.exists():
+        # Try without Release subdirectory
+        alt = _UNSLOTH_LLAMA_CPP_DIR / "build" / "bin" / "llama-quantize.exe"
+        if alt.exists():
+            quantize = alt
+        else:
+            quantize = None
+
+    return converter, quantize
 
 
 def _get_model_family(model_name: str) -> str:
@@ -228,13 +262,15 @@ def run_gguf_export(
     """
     Full GGUF export pipeline. Runs synchronously (call via ThreadPoolExecutor).
 
-    Steps:
-    1. Pre-flight disk space check
-    2. Load base model + LoRA adapter
-    3. Merge + export to GGUF via unsloth
-    4. Generate Modelfile with correct template
-    5. Register in Ollama
-    6. Verify with test prompt
+    Pipeline:
+    1. Pre-flight checks (disk, Ollama, checkpoint, llama.cpp tools)
+    2. Load base model + LoRA adapter via unsloth
+    3. Merge LoRA + save as HuggingFace model (save_pretrained_merged)
+    4. Convert HF model -> BF16 GGUF (convert_hf_to_gguf.py)
+    5. Quantize BF16 GGUF -> Q4_K_M GGUF (llama-quantize)
+    6. Generate Modelfile with correct template
+    7. Register in Ollama
+    8. Verify with test prompt
     """
     start_time = time.time()
 
@@ -249,7 +285,6 @@ def run_gguf_export(
             error="Ollama is not running. Start Ollama before exporting.",
         )
 
-    # Validate checkpoint exists
     checkpoint_dir = Path(checkpoint_path)
     if not checkpoint_dir.exists():
         return ExportResult(
@@ -257,16 +292,34 @@ def run_gguf_export(
             error=f"Checkpoint not found: {checkpoint_path}",
         )
 
+    converter_script, quantize_exe = _find_llama_cpp_tools()
+    if not converter_script or not quantize_exe:
+        missing = []
+        if not converter_script:
+            missing.append("convert_hf_to_gguf.py")
+        if not quantize_exe:
+            missing.append("llama-quantize.exe")
+        return ExportResult(
+            success=False,
+            error=(
+                f"Missing llama.cpp tools: {', '.join(missing)}. "
+                f"Expected at {_UNSLOTH_LLAMA_CPP_DIR}. "
+                f"Run a one-time unsloth GGUF export to bootstrap, or manually "
+                f"download from https://github.com/ggerganov/llama.cpp/releases"
+            ),
+        )
+    logger.info("llama.cpp tools found: converter=%s, quantize=%s", converter_script, quantize_exe)
+
     # Determine model family and build names
     model_family = _get_model_family(base_model_name)
     short_model = base_model_name.split("/")[-1].lower()
-    # Clean up the model name for Ollama (remove bnb-4bit suffix etc.)
     for suffix in ["-bnb-4bit", "-bnb-8bit", "-instruct"]:
         short_model = short_model.replace(suffix, "")
     ollama_model_name = f"synthboard-{short_model}-{run_id}"
 
-    # Export directory
+    # Directories
     export_dir = EXPORTS_DIR / run_id
+    merged_dir = export_dir / "merged"
     export_dir.mkdir(parents=True, exist_ok=True)
 
     gguf_path = None
@@ -285,37 +338,25 @@ def run_gguf_export(
         )
         logger.info("Model loaded from checkpoint: %s", checkpoint_path)
 
-        # ── 3. Merge + export to GGUF ──
-        logger.info("Starting GGUF export (quantization: %s)...", quantization_method)
-        model.save_pretrained_gguf(
-            str(export_dir),
+        # ── 3. Merge LoRA + save as HuggingFace model ──
+        logger.info("Merging LoRA adapters and saving HuggingFace model...")
+        model.save_pretrained_merged(
+            str(merged_dir),
             tokenizer,
-            quantization_method=quantization_method,
+            save_method="merged_16bit",
         )
-        logger.info("GGUF export complete")
-
-        # Find the generated GGUF file
-        gguf_files = list(export_dir.glob("*.gguf"))
-        if not gguf_files:
-            return ExportResult(
-                success=False,
-                error="GGUF export produced no .gguf file. Check logs for conversion errors.",
-            )
-
-        gguf_path = str(gguf_files[0])
-        gguf_size_mb = os.path.getsize(gguf_path) / (1024 * 1024)
-        logger.info("GGUF file: %s (%.1f MB)", gguf_path, gguf_size_mb)
+        logger.info("Merged model saved to: %s", merged_dir)
 
     except Exception as e:
         elapsed = time.time() - start_time
-        logger.error("GGUF export failed: %s", e, exc_info=True)
+        logger.error("Model merge failed: %s", e, exc_info=True)
         return ExportResult(
             success=False,
-            error=f"GGUF export failed: {e}",
+            error=f"Model merge failed: {e}",
             total_time_seconds=round(elapsed, 1),
         )
     finally:
-        # Free GPU memory
+        # Free GPU memory before conversion steps
         try:
             if "model" in locals():
                 del model
@@ -328,7 +369,89 @@ def run_gguf_export(
         except Exception:
             pass
 
-    # ── 4+5. Register in Ollama ──
+    # ── 4. Convert HF model -> BF16 GGUF ──
+    # Derive a clean model name for the GGUF filename
+    model_label = short_model.replace(".", "-")
+    bf16_gguf = export_dir / f"{model_label}-BF16.gguf"
+
+    logger.info("Converting HF model to BF16 GGUF...")
+    try:
+        result = subprocess.run(
+            [
+                sys.executable,
+                str(converter_script),
+                str(merged_dir),
+                "--outfile", str(bf16_gguf),
+                "--outtype", "bf16",
+            ],
+            capture_output=True,
+            text=True,
+            timeout=600,  # 10 min timeout
+        )
+        if result.returncode != 0:
+            error_detail = result.stderr.strip() or result.stdout.strip()
+            logger.error("HF->GGUF conversion failed: %s", error_detail)
+            return ExportResult(
+                success=False,
+                error=f"HF->GGUF conversion failed (exit {result.returncode}): {error_detail[-500:]}",
+                total_time_seconds=round(time.time() - start_time, 1),
+            )
+        logger.info("BF16 GGUF created: %s", bf16_gguf)
+    except subprocess.TimeoutExpired:
+        return ExportResult(
+            success=False,
+            error="HF->GGUF conversion timed out after 600 seconds.",
+            total_time_seconds=round(time.time() - start_time, 1),
+        )
+
+    # ── 5. Quantize BF16 GGUF -> Q4_K_M ──
+    quantized_gguf = export_dir / f"{model_label}-{quantization_method.upper()}.gguf"
+
+    logger.info("Quantizing BF16 -> %s...", quantization_method.upper())
+    try:
+        result = subprocess.run(
+            [
+                str(quantize_exe),
+                str(bf16_gguf),
+                str(quantized_gguf),
+                quantization_method.upper(),
+            ],
+            capture_output=True,
+            text=True,
+            timeout=600,  # 10 min timeout
+        )
+        if result.returncode != 0:
+            error_detail = result.stderr.strip() or result.stdout.strip()
+            logger.error("GGUF quantization failed: %s", error_detail)
+            return ExportResult(
+                success=False,
+                error=f"GGUF quantization failed (exit {result.returncode}): {error_detail[-500:]}",
+                total_time_seconds=round(time.time() - start_time, 1),
+            )
+        logger.info("Quantized GGUF created: %s", quantized_gguf)
+    except subprocess.TimeoutExpired:
+        return ExportResult(
+            success=False,
+            error="GGUF quantization timed out after 600 seconds.",
+            total_time_seconds=round(time.time() - start_time, 1),
+        )
+
+    gguf_path = str(quantized_gguf)
+    gguf_size_mb = os.path.getsize(gguf_path) / (1024 * 1024)
+    logger.info("Final GGUF: %s (%.1f MB)", gguf_path, gguf_size_mb)
+
+    # Clean up intermediate files (merged HF model + BF16 GGUF)
+    logger.info("Cleaning up intermediate files...")
+    try:
+        shutil.rmtree(merged_dir)
+    except Exception:
+        pass
+    try:
+        bf16_gguf.unlink()
+    except Exception:
+        pass
+
+    # ── 6+7. Register in Ollama ──
     logger.info("Registering model in Ollama as '%s'...", ollama_model_name)
     reg_error = _register_in_ollama(ollama_model_name, gguf_path, model_family, export_dir)
     if reg_error:
@@ -340,12 +463,11 @@ def run_gguf_export(
             total_time_seconds=round(elapsed, 1),
         )
 
-    # ── 6. Verify ──
+    # ── 8. Verify ──
     logger.info("Running test inference to verify model...")
     verify_error = _verify_with_test_prompt(ollama_model_name)
     if verify_error:
         logger.warning("Test inference failed (model may still work): %s", verify_error)
-        # Don't fail the whole export for a verification issue
 
     elapsed = time.time() - start_time
     logger.info(
@@ -353,29 +475,9 @@ def run_gguf_export(
         base_model_name, ollama_model_name, gguf_size_mb, elapsed,
     )
 
-    # Clean up temporary merge files (keep only the .gguf and Modelfile)
-    _cleanup_temp_files(export_dir)
-
     return ExportResult(
         success=True,
         gguf_path=gguf_path,
         ollama_model_name=ollama_model_name,
         total_time_seconds=round(elapsed, 1),
     )
-
-
-def _cleanup_temp_files(export_dir: Path) -> None:
-    """Remove temporary merge files, keeping only .gguf and Modelfile."""
-    keep_extensions = {".gguf"}
-    keep_names = {"Modelfile"}
-    for item in export_dir.iterdir():
-        if item.is_file() and item.suffix not in keep_extensions and item.name not in keep_names:
-            try:
-                item.unlink()
-            except Exception:
-                pass
-        elif item.is_dir():
-            try:
-                shutil.rmtree(item)
-            except Exception:
-                pass
