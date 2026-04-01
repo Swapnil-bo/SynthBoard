@@ -2,11 +2,13 @@
 import asyncio
 import json
 import logging
+import os
 import uuid
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
 
-from fastapi import APIRouter, HTTPException
+import httpx
+from fastapi import APIRouter, HTTPException, Query
 
 from backend.config import DEFAULT_ELO, OLLAMA_BASE_URL
 from backend.db.database import get_db
@@ -60,6 +62,62 @@ async def list_models():
         return [_row_to_arena_model(row) for row in rows]
     finally:
         await db.close()
+
+
+# ---------------------------------------------------------------------------
+# GET /api/models/exportable-runs — completed training runs not yet exported
+# ---------------------------------------------------------------------------
+
+@router.get("/exportable-runs")
+async def list_exportable_runs():
+    """Return completed training runs that haven't been exported to GGUF yet."""
+    db = await get_db()
+    try:
+        cursor = await db.execute(
+            "SELECT id, base_model, dataset_id, status, final_loss, total_steps, "
+            "started_at, completed_at, checkpoint_path, gguf_path, ollama_model_name "
+            "FROM training_runs WHERE status = 'completed' AND gguf_path IS NULL "
+            "ORDER BY completed_at DESC"
+        )
+        rows = await cursor.fetchall()
+        return {"runs": [dict(row) for row in rows]}
+    finally:
+        await db.close()
+
+
+# ---------------------------------------------------------------------------
+# GET /api/models/available — proxy to Ollama API to list installed models
+# ---------------------------------------------------------------------------
+
+@router.get("/available")
+async def list_available_ollama_models():
+    """Fetch installed models from Ollama (proxy for GET /api/tags)."""
+    try:
+        async with httpx.AsyncClient(timeout=10) as client:
+            resp = await client.get(f"{OLLAMA_BASE_URL}/api/tags")
+            resp.raise_for_status()
+            data = resp.json()
+    except httpx.ConnectError:
+        raise HTTPException(
+            503,
+            "Cannot connect to Ollama. Is it running? "
+            f"Expected at {OLLAMA_BASE_URL}",
+        )
+    except httpx.HTTPError as e:
+        raise HTTPException(502, f"Ollama API error: {e}")
+
+    # Return a simplified list
+    models = []
+    for m in data.get("models", []):
+        models.append({
+            "name": m.get("name", ""),
+            "size": m.get("size", 0),
+            "parameter_size": m.get("details", {}).get("parameter_size", ""),
+            "quantization_level": m.get("details", {}).get("quantization_level", ""),
+            "family": m.get("details", {}).get("family", ""),
+            "modified_at": m.get("modified_at", ""),
+        })
+    return {"models": models}
 
 
 # ---------------------------------------------------------------------------
@@ -222,20 +280,41 @@ async def export_model(run_id: str, request: ExportRequest = None):
 # ---------------------------------------------------------------------------
 
 @router.delete("/{model_id}")
-async def delete_model(model_id: str):
-    """Remove a model from the arena."""
+async def delete_model(model_id: str, delete_gguf: bool = Query(False)):
+    """Remove a model from the arena. Optionally delete the GGUF file."""
     db = await get_db()
     try:
         cursor = await db.execute(
-            "SELECT id, name FROM arena_models WHERE id = ?", (model_id,)
+            "SELECT * FROM arena_models WHERE id = ?", (model_id,)
         )
         row = await cursor.fetchone()
         if not row:
             raise HTTPException(404, f"Arena model '{model_id}' not found.")
 
+        gguf_deleted = False
+        if delete_gguf and row["training_run_id"]:
+            # Look up the training run for its gguf_path
+            cursor2 = await db.execute(
+                "SELECT gguf_path FROM training_runs WHERE id = ?",
+                (row["training_run_id"],),
+            )
+            run_row = await cursor2.fetchone()
+            if run_row and run_row["gguf_path"] and os.path.isfile(run_row["gguf_path"]):
+                try:
+                    os.remove(run_row["gguf_path"])
+                    gguf_deleted = True
+                    logger.info("Deleted GGUF file: %s", run_row["gguf_path"])
+                except OSError as e:
+                    logger.warning("Failed to delete GGUF %s: %s", run_row["gguf_path"], e)
+
+        # Delete Elo history for this model
+        await db.execute("DELETE FROM elo_history WHERE model_id = ?", (model_id,))
         await db.execute("DELETE FROM arena_models WHERE id = ?", (model_id,))
         await db.commit()
 
-        return {"message": f"Model '{row['name']}' removed from arena."}
+        msg = f"Model '{row['name']}' removed from arena."
+        if gguf_deleted:
+            msg += " GGUF file deleted."
+        return {"message": msg, "gguf_deleted": gguf_deleted}
     finally:
         await db.close()
