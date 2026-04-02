@@ -27,6 +27,20 @@ logger = logging.getLogger(__name__)
 
 
 # ---------------------------------------------------------------------------
+# GET /api/arena/random-prompt — pick a random prompt from the bank
+# ---------------------------------------------------------------------------
+
+@router.get("/random-prompt")
+async def random_prompt():
+    """Return a random prompt from the prompt bank."""
+    try:
+        prompt, category = get_random_prompt()
+    except ValueError as e:
+        raise HTTPException(500, str(e))
+    return {"prompt": prompt, "category": category}
+
+
+# ---------------------------------------------------------------------------
 # POST /api/arena/battle — generate a new battle
 # ---------------------------------------------------------------------------
 
