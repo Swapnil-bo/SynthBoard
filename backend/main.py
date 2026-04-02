@@ -6,7 +6,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from backend.db.database import init_db
-from backend.routers import datasets, models, system, training
+from backend.routers import arena, datasets, models, system, training
 from backend.utils.capabilities import run_startup_probe
 
 logger = logging.getLogger(__name__)
@@ -42,3 +42,4 @@ app.include_router(system.router)
 app.include_router(datasets.router)
 app.include_router(training.router)
 app.include_router(models.router)
+app.include_router(arena.router)

@@ -43,3 +43,88 @@ class ExportResponse(BaseModel):
     arena_model_id: Optional[str] = None
     error: Optional[str] = None
     total_time_seconds: Optional[float] = None
+
+
+# ---------------------------------------------------------------------------
+# Arena battle schemas
+# ---------------------------------------------------------------------------
+
+class BattleRequest(BaseModel):
+    """Request to start a new arena battle."""
+    prompt: Optional[str] = Field(
+        None,
+        description="Custom prompt. If omitted, a random prompt is picked from the bank.",
+    )
+
+
+class BattleResponse(BaseModel):
+    """Response for a battle — blinded (model identities hidden until vote)."""
+    id: str
+    prompt: str
+    prompt_category: Optional[str] = None
+    response_a: str
+    response_b: str
+    model_a_ttft_ms: Optional[float] = None
+    model_b_ttft_ms: Optional[float] = None
+    model_a_total_ms: Optional[float] = None
+    model_b_total_ms: Optional[float] = None
+    model_a_tokens: Optional[int] = None
+    model_b_tokens: Optional[int] = None
+
+
+class VoteRequest(BaseModel):
+    """Request to submit a vote on a battle."""
+    winner: str = Field(
+        ...,
+        description="Vote: 'a', 'b', 'tie', or 'skip'.",
+        pattern="^(a|b|tie|skip)$",
+    )
+
+
+class VoteResponse(BaseModel):
+    """Response after voting — reveals model identities and Elo changes."""
+    battle_id: str
+    winner: str
+    model_a_name: str
+    model_b_name: str
+    model_a_id: str
+    model_b_id: str
+    model_a_elo_before: float
+    model_b_elo_before: float
+    model_a_elo_after: float
+    model_b_elo_after: float
+
+
+class BattleDetailResponse(BaseModel):
+    """Full battle details (reveals models after vote, or hides if not voted)."""
+    id: str
+    prompt: str
+    prompt_category: Optional[str] = None
+    response_a: str
+    response_b: str
+    model_a_ttft_ms: Optional[float] = None
+    model_b_ttft_ms: Optional[float] = None
+    model_a_total_ms: Optional[float] = None
+    model_b_total_ms: Optional[float] = None
+    model_a_tokens: Optional[int] = None
+    model_b_tokens: Optional[int] = None
+    winner: Optional[str] = None
+    # Revealed after vote
+    model_a_name: Optional[str] = None
+    model_b_name: Optional[str] = None
+    model_a_id: Optional[str] = None
+    model_b_id: Optional[str] = None
+    model_a_elo_before: Optional[float] = None
+    model_b_elo_before: Optional[float] = None
+    model_a_elo_after: Optional[float] = None
+    model_b_elo_after: Optional[float] = None
+    voted_at: Optional[str] = None
+    created_at: Optional[str] = None
+
+
+class BattleHistoryResponse(BaseModel):
+    """Paginated battle history."""
+    battles: list[BattleDetailResponse]
+    total: int
+    page: int
+    page_size: int
