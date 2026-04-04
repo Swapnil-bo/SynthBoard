@@ -11,7 +11,9 @@ from datetime import datetime, timezone
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import StreamingResponse
 
-from backend.config import MODEL_TIERS, VRAM_SAFETY_MARGIN_MB
+import shutil
+
+from backend.config import CHECKPOINTS_DIR, MODEL_TIERS, VRAM_SAFETY_MARGIN_MB
 from backend.db.database import get_db
 from backend.models.training import TrainingRequest, TrainingRunResponse
 from backend.services.training_broadcaster import get_broadcaster, remove_broadcaster
@@ -217,6 +219,14 @@ async def start_training(request: TrainingRequest):
             logger.info("Run %s completed: loss=%.4f", run_id, result.final_loss or 0)
         elif result.error and "cancelled" in result.error.lower():
             await _update_run_status(run_id, "cancelled")
+            # Delete partial checkpoints on cancel
+            ckpt_dir = CHECKPOINTS_DIR / run_id
+            if ckpt_dir.exists():
+                try:
+                    shutil.rmtree(ckpt_dir)
+                    logger.info("Deleted partial checkpoints for cancelled run %s", run_id)
+                except Exception as cleanup_err:
+                    logger.warning("Failed to clean up checkpoints for %s: %s", run_id, cleanup_err)
             logger.info("Run %s cancelled", run_id)
         else:
             await _update_run_status(run_id, "failed")

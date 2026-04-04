@@ -3,6 +3,8 @@ import api from '../lib/api'
 import UploadZone from '../components/dataset/UploadZone'
 import DataPreview from '../components/dataset/DataPreview'
 import FormatSelector from '../components/dataset/FormatSelector'
+import { useToast } from '../components/Toast'
+import { SkeletonListItem } from '../components/Skeleton'
 
 const FORMAT_BADGES = {
   alpaca: { label: 'Alpaca', color: 'text-accent-success' },
@@ -18,17 +20,18 @@ export default function DatasetsPage() {
   const [selectedId, setSelectedId] = useState(null)
   const [loading, setLoading] = useState(true)
   const [deleting, setDeleting] = useState(null)
+  const toast = useToast()
 
   const fetchList = useCallback(async () => {
     try {
       const { data } = await api.get('/datasets')
       setDatasets(data.datasets)
-    } catch {
-      // ignore
+    } catch (err) {
+      toast.error(err.response?.data?.detail || 'Failed to load datasets')
     } finally {
       setLoading(false)
     }
-  }, [])
+  }, [toast])
 
   const fetchDetail = useCallback(async (id) => {
     try {
@@ -49,6 +52,7 @@ export default function DatasetsPage() {
   const handleUploaded = (data) => {
     fetchList()
     setSelectedId(data.id)
+    toast.success(`Dataset "${data.original_filename}" uploaded`)
   }
 
   const handleDelete = async (e, id) => {
@@ -61,8 +65,9 @@ export default function DatasetsPage() {
         setSelected(null)
       }
       fetchList()
-    } catch {
-      // ignore
+      toast.success('Dataset deleted')
+    } catch (err) {
+      toast.error(err.response?.data?.detail || 'Failed to delete dataset')
     } finally {
       setDeleting(null)
     }
@@ -78,9 +83,16 @@ export default function DatasetsPage() {
 
         <div className="flex-1 overflow-auto">
           {loading ? (
-            <div className="p-4 text-sm text-text-muted">Loading...</div>
+            <div>
+              <SkeletonListItem />
+              <SkeletonListItem />
+              <SkeletonListItem />
+            </div>
           ) : datasets.length === 0 ? (
-            <div className="p-4 text-center">
+            <div className="flex flex-col items-center justify-center py-12 text-center px-4">
+              <svg className="w-10 h-10 mb-3 text-text-muted opacity-40" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
+                <path strokeLinecap="round" strokeLinejoin="round" d="M3 16.5v2.25A2.25 2.25 0 0 0 5.25 21h13.5A2.25 2.25 0 0 0 21 18.75V16.5m-13.5-9L12 3m0 0 4.5 4.5M12 3v13.5" />
+              </svg>
               <div className="text-sm text-text-muted">No datasets yet</div>
               <div className="text-xs text-text-muted mt-1">Upload one to get started</div>
             </div>
@@ -107,7 +119,7 @@ export default function DatasetsPage() {
                         className="text-text-muted hover:text-accent-error text-xs transition-colors ml-2 shrink-0"
                         title="Delete dataset"
                       >
-                        {deleting === ds.id ? '...' : '✕'}
+                        {deleting === ds.id ? '...' : '\u2715'}
                       </button>
                     </div>
                     <div className="flex items-center gap-2 mt-1">
@@ -155,10 +167,15 @@ export default function DatasetsPage() {
             </div>
           </div>
         ) : (
-          <div className="flex items-center justify-center h-full text-text-muted text-sm">
-            {datasets.length > 0
-              ? 'Select a dataset to view details'
-              : 'Upload a dataset to get started'}
+          <div className="flex flex-col items-center justify-center h-full text-text-muted">
+            <svg className="w-10 h-10 mb-3 opacity-30" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
+              <path strokeLinecap="round" strokeLinejoin="round" d="M19.5 14.25v-2.625a3.375 3.375 0 0 0-3.375-3.375h-1.5A1.125 1.125 0 0 1 13.5 7.125v-1.5a3.375 3.375 0 0 0-3.375-3.375H8.25m0 12.75h7.5m-7.5 3H12M10.5 2.25H5.625c-.621 0-1.125.504-1.125 1.125v17.25c0 .621.504 1.125 1.125 1.125h12.75c.621 0 1.125-.504 1.125-1.125V11.25a9 9 0 0 0-9-9Z" />
+            </svg>
+            <div className="text-sm">
+              {datasets.length > 0
+                ? 'Select a dataset to view details'
+                : 'Upload a dataset to get started'}
+            </div>
           </div>
         )}
       </div>

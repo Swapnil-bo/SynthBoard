@@ -1,7 +1,10 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import ResponsePanel from '../components/arena/ResponsePanel'
 import VoteButtons from '../components/arena/VoteButtons'
 import useArena from '../hooks/useArena'
+import api from '../lib/api'
+import { useToast } from '../components/Toast'
+import { OllamaBanner } from '../components/StatusBanner'
 
 export default function ArenaPage() {
   const [prompt, setPrompt] = useState('')
@@ -18,6 +21,25 @@ export default function ArenaPage() {
   } = useArena()
 
   const [loadingPrompt, setLoadingPrompt] = useState(false)
+  const [ollamaDown, setOllamaDown] = useState(false)
+  const [modelCount, setModelCount] = useState(null)
+  const toast = useToast()
+
+  // Check health + model count on mount
+  useEffect(() => {
+    api.get('/system/health').then(r => setOllamaDown(!r.data.ollama_running)).catch(() => {})
+    api.get('/models').then(r => setModelCount(r.data.length)).catch(() => {})
+  }, [])
+
+  // Show toast on vote
+  const handleVote = async (winner) => {
+    await submitVote(winner)
+    if (winner === 'skip') {
+      toast.info('Battle skipped — no Elo change')
+    } else {
+      toast.success('Vote recorded')
+    }
+  }
 
   const handleRandomPrompt = async () => {
     setLoadingPrompt(true)
@@ -70,6 +92,9 @@ export default function ArenaPage() {
   const winnerA = voteResult?.winner === 'a'
   const winnerB = voteResult?.winner === 'b'
 
+  // Not enough models for a battle
+  const notEnoughModels = modelCount != null && modelCount < 2
+
   return (
     <div className="p-6 max-w-7xl mx-auto flex flex-col h-full">
       {/* Header */}
@@ -80,6 +105,20 @@ export default function ArenaPage() {
         </p>
       </div>
 
+      {/* Status banners */}
+      {ollamaDown && <OllamaBanner onDismiss={() => setOllamaDown(false)} />}
+
+      {notEnoughModels && (
+        <div className="mb-4 px-4 py-3 rounded-lg bg-accent-info/10 border border-accent-info/30 flex items-center gap-3">
+          <svg className="w-5 h-5 text-accent-info shrink-0" viewBox="0 0 20 20" fill="currentColor">
+            <path fillRule="evenodd" d="M18 10a8 8 0 11-16 0 8 8 0 0116 0zm-7-4a1 1 0 11-2 0 1 1 0 012 0zM9 9a.75.75 0 000 1.5h.253a.25.25 0 01.244.304l-.459 2.066A1.75 1.75 0 0010.747 15H11a.75.75 0 000-1.5h-.253a.25.25 0 01-.244-.304l.459-2.066A1.75 1.75 0 009.253 9H9z" clipRule="evenodd" />
+          </svg>
+          <span className="text-sm text-text-secondary">
+            Register at least 2 models to start battling. Go to the <a href="/models" className="text-accent-info underline">Models</a> page to register models.
+          </span>
+        </div>
+      )}
+
       {/* Prompt input */}
       <div className="mb-5">
         <div className="flex gap-2 mb-2">
@@ -87,7 +126,7 @@ export default function ArenaPage() {
             value={prompt}
             onChange={(e) => setPrompt(e.target.value)}
             placeholder="Enter a prompt or use a random one..."
-            disabled={isBattleActive}
+            disabled={isBattleActive || notEnoughModels}
             rows={3}
             className="flex-1 px-4 py-3 text-sm bg-bg-secondary border border-border-default rounded-lg text-text-primary placeholder-text-muted/60 resize-none focus:border-accent-info focus:outline-none disabled:opacity-50 font-mono"
             onKeyDown={(e) => {
@@ -101,7 +140,7 @@ export default function ArenaPage() {
         <div className="flex items-center gap-2">
           <button
             onClick={handleStart}
-            disabled={isBattleActive}
+            disabled={isBattleActive || notEnoughModels}
             className="px-5 py-2 text-sm font-semibold rounded-lg bg-accent-success text-bg-primary hover:bg-accent-success/80 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
           >
             {isLoading ? (
@@ -118,7 +157,7 @@ export default function ArenaPage() {
           </button>
           <button
             onClick={handleRandomPrompt}
-            disabled={isBattleActive || loadingPrompt}
+            disabled={isBattleActive || loadingPrompt || notEnoughModels}
             className="px-4 py-2 text-sm font-medium rounded-lg bg-bg-tertiary text-text-secondary border border-border-default hover:bg-bg-hover hover:text-text-primary disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
           >
             {loadingPrompt ? '...' : 'Random Prompt'}
@@ -131,7 +170,7 @@ export default function ArenaPage() {
               New Battle
             </button>
           )}
-          {!isBattleActive && (
+          {!isBattleActive && !notEnoughModels && (
             <span className="text-xs text-text-muted ml-auto">Ctrl+Enter to start</span>
           )}
         </div>
@@ -176,7 +215,7 @@ export default function ArenaPage() {
       {/* Vote buttons */}
       <VoteButtons
         disabled={!canVote || voting}
-        onVote={submitVote}
+        onVote={handleVote}
         voted={isVoted ? voteResult.winner : null}
       />
 

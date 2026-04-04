@@ -1,5 +1,8 @@
 import { useCallback, useEffect, useState } from 'react'
 import api from '../lib/api'
+import { useToast } from '../components/Toast'
+import { SkeletonCard } from '../components/Skeleton'
+import { OllamaBanner, DiskWarningBanner } from '../components/StatusBanner'
 
 const SOURCE_BADGES = {
   base: { label: 'Base', bg: 'bg-accent-info/15', text: 'text-accent-info' },
@@ -19,21 +22,23 @@ export default function ModelsPage() {
   const [exportableRuns, setExportableRuns] = useState([])
   const [showRegister, setShowRegister] = useState(false)
   const [showExport, setShowExport] = useState(false)
+  const [showCleanup, setShowCleanup] = useState(false)
   const [deleting, setDeleting] = useState(null)
   const [exporting, setExporting] = useState(null)
-  const [error, setError] = useState(null)
-  const [success, setSuccess] = useState(null)
+  const [ollamaDown, setOllamaDown] = useState(false)
+  const [diskFreeMb, setDiskFreeMb] = useState(null)
+  const toast = useToast()
 
   const fetchModels = useCallback(async () => {
     try {
       const { data } = await api.get('/models')
       setModels(data)
-    } catch {
-      // ignore
+    } catch (err) {
+      toast.error(err.response?.data?.detail || 'Failed to load models')
     } finally {
       setLoading(false)
     }
-  }, [])
+  }, [toast])
 
   const fetchExportableRuns = useCallback(async () => {
     try {
@@ -44,42 +49,49 @@ export default function ModelsPage() {
     }
   }, [])
 
+  const checkHealth = useCallback(async () => {
+    try {
+      const { data } = await api.get('/system/health')
+      setOllamaDown(!data.ollama_running)
+      setDiskFreeMb(data.disk_free_mb)
+    } catch {
+      // ignore
+    }
+  }, [])
+
   useEffect(() => {
     fetchModels()
     fetchExportableRuns()
-  }, [fetchModels, fetchExportableRuns])
+    checkHealth()
+  }, [fetchModels, fetchExportableRuns, checkHealth])
 
   const handleDelete = async (model, deleteGguf = false) => {
     if (!confirm(`Remove "${model.name}" from the arena?${deleteGguf ? ' This will also delete the GGUF file.' : ''}`)) return
     setDeleting(model.id)
-    setError(null)
     try {
       await api.delete(`/models/${model.id}?delete_gguf=${deleteGguf}`)
-      setSuccess(`Removed "${model.name}"`)
+      toast.success(`Removed "${model.name}"`)
       fetchModels()
       fetchExportableRuns()
     } catch (err) {
-      setError(err.response?.data?.detail || 'Failed to delete model')
+      toast.error(err.response?.data?.detail || 'Failed to delete model')
     } finally {
       setDeleting(null)
-      setTimeout(() => setSuccess(null), 3000)
     }
   }
 
   const handleExport = async (runId) => {
     setExporting(runId)
-    setError(null)
     try {
       const { data } = await api.post(`/models/export/${runId}`, {}, { timeout: 600000 })
-      setSuccess(`Exported! Model: ${data.ollama_model_name}`)
+      toast.success(`Exported! Model: ${data.ollama_model_name}`)
       setShowExport(false)
       fetchModels()
       fetchExportableRuns()
     } catch (err) {
-      setError(err.response?.data?.detail || 'Export failed')
+      toast.error(err.response?.data?.detail || 'Export failed')
     } finally {
       setExporting(null)
-      setTimeout(() => setSuccess(null), 5000)
     }
   }
 
@@ -93,13 +105,19 @@ export default function ModelsPage() {
         </div>
         <div className="flex gap-2">
           <button
-            onClick={() => { setShowExport(true); setShowRegister(false) }}
+            onClick={() => { setShowCleanup(true); setShowExport(false); setShowRegister(false) }}
+            className="px-3 py-2 text-sm font-medium rounded-lg bg-bg-tertiary text-text-secondary border border-border-default hover:bg-bg-hover transition-colors"
+          >
+            Disk Cleanup
+          </button>
+          <button
+            onClick={() => { setShowExport(true); setShowRegister(false); setShowCleanup(false) }}
             className="px-3 py-2 text-sm font-medium rounded-lg bg-accent-success/15 text-accent-success hover:bg-accent-success/25 transition-colors"
           >
             Export to Arena
           </button>
           <button
-            onClick={() => { setShowRegister(true); setShowExport(false) }}
+            onClick={() => { setShowRegister(true); setShowExport(false); setShowCleanup(false) }}
             className="px-3 py-2 text-sm font-medium rounded-lg bg-accent-info/15 text-accent-info hover:bg-accent-info/25 transition-colors"
           >
             Register Base Model
@@ -107,25 +125,16 @@ export default function ModelsPage() {
         </div>
       </div>
 
-      {/* Notifications */}
-      {error && (
-        <div className="mb-4 px-4 py-3 rounded-lg bg-accent-error/10 border border-accent-error/30 text-accent-error text-sm">
-          {error}
-          <button onClick={() => setError(null)} className="ml-2 opacity-60 hover:opacity-100">✕</button>
-        </div>
-      )}
-      {success && (
-        <div className="mb-4 px-4 py-3 rounded-lg bg-accent-success/10 border border-accent-success/30 text-accent-success text-sm">
-          {success}
-        </div>
-      )}
+      {/* Status banners */}
+      {ollamaDown && <OllamaBanner onDismiss={() => setOllamaDown(false)} />}
+      {diskFreeMb != null && diskFreeMb < 5000 && <DiskWarningBanner freeMb={diskFreeMb} />}
 
       {/* Register Base Model Panel */}
       {showRegister && (
         <RegisterBaseModelPanel
-          onRegistered={() => { setShowRegister(false); fetchModels() }}
+          onRegistered={() => { setShowRegister(false); fetchModels(); toast.success('Model registered') }}
           onCancel={() => setShowRegister(false)}
-          onError={setError}
+          onError={(msg) => toast.error(msg)}
         />
       )}
 
@@ -139,9 +148,21 @@ export default function ModelsPage() {
         />
       )}
 
+      {/* Cleanup Panel */}
+      {showCleanup && (
+        <CleanupPanel
+          onClose={() => setShowCleanup(false)}
+          onDone={() => checkHealth()}
+        />
+      )}
+
       {/* Model List */}
       {loading ? (
-        <div className="text-sm text-text-muted py-8 text-center">Loading models...</div>
+        <div className="grid gap-3">
+          <SkeletonCard />
+          <SkeletonCard />
+          <SkeletonCard />
+        </div>
       ) : models.length === 0 ? (
         <EmptyState />
       ) : (
@@ -252,7 +273,6 @@ function RegisterBaseModelPanel({ onRegistered, onCancel, onError }) {
 
   const handleSelect = (name) => {
     setSelectedModel(name)
-    // Auto-fill display name from model name
     setDisplayName(name.split(':')[0])
   }
 
@@ -393,6 +413,100 @@ function ExportPanel({ runs, exporting, onExport, onCancel }) {
           )}
         </div>
       )}
+    </div>
+  )
+}
+
+// ─── Cleanup Panel ───────────────────────────────────────────────────────────
+
+function CleanupPanel({ onClose, onDone }) {
+  const [diskUsage, setDiskUsage] = useState(null)
+  const [cleaning, setCleaning] = useState(false)
+  const [result, setResult] = useState(null)
+  const toast = useToast()
+
+  useEffect(() => {
+    api.get('/system/disk').then(r => setDiskUsage(r.data)).catch(() => {})
+  }, [])
+
+  const handleCleanup = async () => {
+    setCleaning(true)
+    try {
+      const { data } = await api.post('/system/cleanup')
+      setResult(data)
+      if (data.space_reclaimed_mb > 0) {
+        toast.success(`Reclaimed ${data.space_reclaimed_mb} MB of disk space`)
+      } else {
+        toast.info('Nothing to clean up')
+      }
+      // Refresh disk usage
+      api.get('/system/disk').then(r => setDiskUsage(r.data)).catch(() => {})
+      onDone()
+    } catch (err) {
+      toast.error(err.response?.data?.detail || 'Cleanup failed')
+    } finally {
+      setCleaning(false)
+    }
+  }
+
+  return (
+    <div className="mb-6 bg-bg-secondary border border-border-default rounded-lg p-4">
+      <div className="flex items-center justify-between mb-3">
+        <h3 className="text-sm font-semibold text-text-primary">Disk Cleanup</h3>
+        <button onClick={onClose} className="text-text-muted hover:text-text-primary text-xs">Close</button>
+      </div>
+
+      {/* Disk usage breakdown */}
+      {diskUsage && (
+        <div className="grid grid-cols-2 sm:grid-cols-5 gap-3 mb-4">
+          <DiskStat label="Uploads" mb={diskUsage.uploads.size_mb} count={diskUsage.uploads.file_count} />
+          <DiskStat label="Formatted" mb={diskUsage.formatted.size_mb} count={diskUsage.formatted.file_count} />
+          <DiskStat label="Checkpoints" mb={diskUsage.checkpoints.size_mb} count={diskUsage.checkpoints.file_count} />
+          <DiskStat label="Exports" mb={diskUsage.exports.size_mb} count={diskUsage.exports.file_count} />
+          <DiskStat label="Total" mb={diskUsage.total_mb} highlight />
+        </div>
+      )}
+
+      <p className="text-xs text-text-muted mb-3">
+        Removes orphaned checkpoints (from cancelled/failed training runs) and temporary merged model directories.
+      </p>
+
+      <div className="flex items-center gap-3">
+        <button
+          onClick={handleCleanup}
+          disabled={cleaning}
+          className="px-4 py-2 text-sm font-medium rounded-lg bg-accent-warning/15 text-accent-warning hover:bg-accent-warning/25 disabled:opacity-50 transition-colors"
+        >
+          {cleaning ? 'Cleaning...' : 'Run Cleanup'}
+        </button>
+
+        {result && (
+          <div className="text-xs text-text-muted">
+            {result.space_reclaimed_mb > 0
+              ? `Reclaimed ${result.space_reclaimed_mb} MB (${result.deleted_checkpoint_dirs} checkpoint dirs, ${result.deleted_merged_dirs} merged dirs)`
+              : 'No orphaned files found.'}
+          </div>
+        )}
+      </div>
+
+      {result?.details?.length > 0 && (
+        <div className="mt-3 text-xs font-mono text-text-muted space-y-0.5 max-h-32 overflow-auto">
+          {result.details.map((d, i) => <div key={i}>{d}</div>)}
+        </div>
+      )}
+    </div>
+  )
+}
+
+function DiskStat({ label, mb, count, highlight }) {
+  const display = mb >= 1024 ? `${(mb / 1024).toFixed(1)} GB` : `${Math.round(mb)} MB`
+  return (
+    <div className="bg-bg-tertiary border border-border-default rounded-lg px-3 py-2">
+      <div className="text-[10px] text-text-muted uppercase tracking-wide">{label}</div>
+      <div className={`text-sm font-mono ${highlight ? 'text-accent-warning font-semibold' : 'text-text-primary'}`}>
+        {display}
+      </div>
+      {count != null && <div className="text-[10px] text-text-muted">{count} files</div>}
     </div>
   )
 }

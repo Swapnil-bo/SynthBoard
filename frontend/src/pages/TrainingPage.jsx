@@ -2,6 +2,8 @@ import { useCallback, useEffect, useState } from 'react'
 import api from '../lib/api'
 import TrainingConfig from '../components/training/TrainingConfig'
 import TrainingProgress from '../components/training/TrainingProgress'
+import { useToast } from '../components/Toast'
+import { SkeletonTable } from '../components/Skeleton'
 
 const STATUS_STYLES = {
   running: { text: 'text-accent-success', bg: 'bg-accent-success/15' },
@@ -27,6 +29,7 @@ export default function TrainingPage() {
   const [loadingRuns, setLoadingRuns] = useState(true)
   const [activeRun, setActiveRun] = useState(null)
   const [selectedRunId, setSelectedRunId] = useState(null)
+  const toast = useToast()
 
   const fetchRuns = useCallback(async () => {
     try {
@@ -42,12 +45,12 @@ export default function TrainingPage() {
         const updated = data.find(r => r.id === activeRun.id)
         if (updated) setActiveRun(updated)
       }
-    } catch {
-      // ignore
+    } catch (err) {
+      toast.error(err.response?.data?.detail || 'Failed to load training runs')
     } finally {
       setLoadingRuns(false)
     }
-  }, [activeRun])
+  }, [activeRun, toast])
 
   useEffect(() => { fetchRuns() }, []) // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -55,6 +58,7 @@ export default function TrainingPage() {
     setActiveRun(run)
     setSelectedRunId(run.id)
     fetchRuns()
+    toast.success('Training started')
   }
 
   const handleRunUpdated = () => {
@@ -105,9 +109,15 @@ export default function TrainingPage() {
             <p className="text-xs text-text-muted mb-3">All past and current training runs</p>
 
             {loadingRuns ? (
-              <div className="text-sm text-text-muted">Loading...</div>
+              <SkeletonTable rows={3} cols={6} />
             ) : runs.length === 0 ? (
-              <div className="text-sm text-text-muted py-4">No training runs yet. Configure and start one on the left.</div>
+              <div className="flex flex-col items-center py-8 text-text-muted">
+                <svg className="w-8 h-8 mb-2 opacity-30" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M12 6v6h4.5m4.5 0a9 9 0 1 1-18 0 9 9 0 0 1 18 0Z" />
+                </svg>
+                <div className="text-sm">No training runs yet</div>
+                <div className="text-xs mt-1">Configure and start one on the left</div>
+              </div>
             ) : (
               <div className="border border-border-default rounded-lg overflow-hidden">
                 <table className="w-full text-sm">

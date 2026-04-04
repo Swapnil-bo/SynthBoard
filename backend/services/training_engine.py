@@ -526,17 +526,28 @@ def run_training(
         elapsed = time.time() - start_time
         logger.error("Training failed after %.1fs: %s", elapsed, e, exc_info=True)
 
+        # Detect OOM errors and provide actionable advice
+        err_str = str(e).lower()
+        is_oom = "out of memory" in err_str or ("cuda" in err_str and "oom" in err_str)
+        if is_oom:
+            user_msg = (
+                "CUDA out of memory. Try: (1) reduce Max Seq Length to 512, "
+                "(2) use a smaller model (Tier 1), or (3) close other GPU applications."
+            )
+        else:
+            user_msg = str(e)
+
         # Push error event to SSE subscribers
         broadcaster.push(TrainingEvent(
             event_type="error",
-            data={"message": str(e)},
+            data={"message": user_msg},
         ))
 
         return TrainingResult(
             success=False,
             run_id=run_id,
             total_time_seconds=round(elapsed, 1),
-            error=str(e),
+            error=user_msg,
         )
     finally:
         # Free VRAM

@@ -52,6 +52,13 @@ class ModelTierInfo(BaseModel):
     gated: bool
 
 
+class CleanupResult(BaseModel):
+    deleted_checkpoint_dirs: int = 0
+    deleted_merged_dirs: int = 0
+    space_reclaimed_mb: float = 0.0
+    details: list[str] = []
+
+
 class CapabilitiesResponse(BaseModel):
     # CUDA / torch
     cuda_available: bool

@@ -16,14 +16,19 @@ from backend.config import (
     UPLOADS_DIR,
 )
 from backend.db.database import get_db
+import logging
+
 from backend.models.system import (
     CapabilitiesResponse,
+    CleanupResult,
     DiskCategory,
     DiskUsageResponse,
     GpuStatsResponse,
     HealthResponse,
     ModelTierInfo,
 )
+
+cleanup_logger = logging.getLogger(__name__)
 from backend.utils.capabilities import get_capabilities
 from backend.utils.gpu_monitor import get_backend_name, get_gpu_stats
 
@@ -205,3 +210,54 @@ async def capabilities():
         training_ready=training_ready,
         warnings=probe.warnings,
     )
+
+
+@router.post("/cleanup", response_model=CleanupResult)
+async def disk_cleanup():
+    """Delete orphaned checkpoints (from cancelled/failed runs) and merged model dirs."""
+    result = CleanupResult()
+
+    # Get active/completed run IDs that should keep their checkpoints
+    keep_run_ids: set[str] = set()
+    db = await get_db()
+    try:
+        cursor = await db.execute(
+            "SELECT id FROM training_runs WHERE status IN ('running', 'completed')"
+        )
+        rows = await cursor.fetchall()
+        keep_run_ids = {row["id"] for row in rows}
+    finally:
+        await db.close()
+
+    # 1. Clean orphaned checkpoint dirs (failed/cancelled runs)
+    if CHECKPOINTS_DIR.exists():
+        for child in CHECKPOINTS_DIR.iterdir():
+            if child.is_dir() and child.name not in keep_run_ids:
+                size = sum(f.stat().st_size for f in child.rglob("*") if f.is_file())
+                try:
+                    shutil.rmtree(child)
+                    mb = round(size / (1024 * 1024), 1)
+                    result.deleted_checkpoint_dirs += 1
+                    result.space_reclaimed_mb += mb
+                    result.details.append(f"Deleted checkpoint dir: {child.name} ({mb} MB)")
+                    cleanup_logger.info("Cleanup: deleted checkpoint dir %s (%.1f MB)", child.name, mb)
+                except Exception as e:
+                    cleanup_logger.warning("Cleanup: failed to delete %s: %s", child.name, e)
+
+    # 2. Clean merged model dirs in exports (temporary artifacts from GGUF export)
+    if EXPORTS_DIR.exists():
+        for child in EXPORTS_DIR.iterdir():
+            if child.is_dir() and child.name.startswith("merged_"):
+                size = sum(f.stat().st_size for f in child.rglob("*") if f.is_file())
+                try:
+                    shutil.rmtree(child)
+                    mb = round(size / (1024 * 1024), 1)
+                    result.deleted_merged_dirs += 1
+                    result.space_reclaimed_mb += mb
+                    result.details.append(f"Deleted merged model dir: {child.name} ({mb} MB)")
+                    cleanup_logger.info("Cleanup: deleted merged dir %s (%.1f MB)", child.name, mb)
+                except Exception as e:
+                    cleanup_logger.warning("Cleanup: failed to delete %s: %s", child.name, e)
+
+    result.space_reclaimed_mb = round(result.space_reclaimed_mb, 1)
+    return result

@@ -4,6 +4,8 @@ import api from '../lib/api'
 import EloTable from '../components/leaderboard/EloTable'
 import WinRateChart from '../components/leaderboard/WinRateChart'
 import LatencyChart from '../components/leaderboard/LatencyChart'
+import { useToast } from '../components/Toast'
+import { SkeletonStatCard, SkeletonTable } from '../components/Skeleton'
 
 export default function LeaderboardPage() {
   const [models, setModels] = useState([])
@@ -11,7 +13,7 @@ export default function LeaderboardPage() {
   const [eloHistories, setEloHistories] = useState({})
   const [expandedId, setExpandedId] = useState(null)
   const [loading, setLoading] = useState(true)
-  const [error, setError] = useState(null)
+  const toast = useToast()
 
   const fetchData = useCallback(async () => {
     try {
@@ -35,13 +37,12 @@ export default function LeaderboardPage() {
         })
       )
       setEloHistories(histories)
-      setError(null)
     } catch (err) {
-      setError(err.response?.data?.detail || 'Failed to load leaderboard')
+      toast.error(err.response?.data?.detail || 'Failed to load leaderboard')
     } finally {
       setLoading(false)
     }
-  }, [])
+  }, [toast])
 
   useEffect(() => {
     fetchData()
@@ -80,16 +81,15 @@ export default function LeaderboardPage() {
         <p className="text-sm text-text-muted">Elo rankings, win rates, and latency statistics.</p>
       </div>
 
-      {/* Error */}
-      {error && (
-        <div className="mb-4 px-4 py-3 rounded-lg bg-accent-error/10 border border-accent-error/30 text-accent-error text-sm">
-          {error}
-          <button onClick={() => setError(null)} className="ml-2 opacity-60 hover:opacity-100">x</button>
-        </div>
-      )}
-
       {/* Stats summary bar */}
-      {stats && (
+      {loading ? (
+        <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 mb-6">
+          <SkeletonStatCard />
+          <SkeletonStatCard />
+          <SkeletonStatCard />
+          <SkeletonStatCard />
+        </div>
+      ) : stats && (
         <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 mb-6">
           <StatCard label="Total Battles" value={stats.total_battles} />
           <StatCard label="Total Votes" value={totalVotes} />
@@ -108,7 +108,18 @@ export default function LeaderboardPage() {
 
       {/* Loading */}
       {loading ? (
-        <div className="text-sm text-text-muted py-12 text-center">Loading leaderboard...</div>
+        <SkeletonTable rows={4} cols={8} />
+      ) : models.length === 0 ? (
+        /* Empty state */
+        <div className="flex flex-col items-center justify-center py-16 text-center">
+          <svg className="w-12 h-12 mb-4 text-text-muted opacity-40" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
+            <path strokeLinecap="round" strokeLinejoin="round" d="M16.5 18.75h-9m9 0a3 3 0 0 1 3 3h-15a3 3 0 0 1 3-3m9 0v-3.375c0-.621-.503-1.125-1.125-1.125h-.871M7.5 18.75v-3.375c0-.621.504-1.125 1.125-1.125h.872m5.007 0H9.497m5.007 0a7.454 7.454 0 0 1-.982-3.172M9.497 14.25a7.454 7.454 0 0 0 .981-3.172M5.25 4.236c-.982.143-1.954.317-2.916.52A6.003 6.003 0 0 0 7.73 9.728M5.25 4.236V4.5c0 2.108.966 3.99 2.48 5.228M5.25 4.236V2.721C7.456 2.41 9.71 2.25 12 2.25c2.291 0 4.545.16 6.75.47v1.516M18.75 4.236c.982.143 1.954.317 2.916.52A6.003 6.003 0 0 1 16.27 9.728M18.75 4.236V4.5c0 2.108-.966 3.99-2.48 5.228m0 0a6.023 6.023 0 0 1-2.77.896m-5.458 0a6.024 6.024 0 0 1-2.772-.896" />
+          </svg>
+          <p className="text-sm text-text-muted mb-1">No battles yet</p>
+          <p className="text-xs text-text-muted">
+            Run some arena battles first. Go to the <a href="/arena" className="text-accent-info underline">Arena</a> to get started.
+          </p>
+        </div>
       ) : (
         <>
           {/* Main table */}
