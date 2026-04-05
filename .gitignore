@@ -47,3 +47,6 @@ logs/
 
 # Unsloth cache
 unsloth_compiled_cache/
+
+# Claude Code
+.claude/
