@@ -324,6 +324,3 @@ The backend exposes a full REST API. Interactive docs are available at `http://l
 
 ---
 
-## License
-
-MIT
